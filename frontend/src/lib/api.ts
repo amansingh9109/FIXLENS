@@ -72,3 +72,14 @@ export const verifySession = (id: string, final_note: string) => request(`/api/v
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ final_note }),
 }, "Could not complete verification. Please retry.");
 export const getReport = <T,>(id: string) => request<T>(`/api/v1/sessions/${encodeURIComponent(id)}/report`, {}, "Could not load the report. Please retry.");
+
+export type ChatMessage = { id: string; role: "user" | "assistant"; content: string; evidence_id?: string; created_at: string };
+export type ChatResponse = { session_id: string; messages: ChatMessage[] };
+export function sendMessage(message: string, requestId: string, sessionId?: string, file?: File | null) {
+  const body = new FormData();
+  body.append("message", message); body.append("request_id", requestId);
+  if (sessionId) body.append("session_id", sessionId);
+  if (file) body.append("file", file);
+  return request<ChatResponse>("/api/v1/chat", { method: "POST", body }, "Couldn't send your message. Please retry.");
+}
+export const getChat = (id: string) => request<ChatResponse>(`/api/v1/sessions/${encodeURIComponent(id)}`);

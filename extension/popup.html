@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FixLens</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    body {
+      width: 280px;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 18px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .logo-icon {
+      font-size: 20px;
+    }
+    .logo-title {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #38bdf8;
+    }
+    .tagline {
+      font-size: 13px;
+      line-height: 1.45;
+      color: #94a3b8;
+      margin-bottom: 18px;
+    }
+    .btn-select {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      padding: 11px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    .btn-select:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(37, 99, 235, 0.45);
+      background: linear-gradient(135deg, #0369a1 0%, #1d4ed8 100%);
+    }
+    .btn-select:active {
+      transform: translateY(0);
+    }
+    .btn-icon {
+      font-size: 16px;
+    }
+    .error-box {
+      display: none;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="logo-icon">🔍</span>
+    <span class="logo-title">FixLens</span>
+  </div>
+  <p class="tagline">See a problem?<br>Select it and I'll explain.</p>
+  <button id="select-btn" class="btn-select">
+    <span class="btn-icon">🎯</span>
+    <span>Select Problem Area</span>
+  </button>
+  <div id="error-box" class="error-box"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

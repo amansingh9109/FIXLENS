@@ -73,3 +73,15 @@ class ActionFeedback(BaseModel):
 class EvidenceUploadResponse(BaseModel):
     status: str
     evidence_id: str
+
+
+class ChatReply(BaseModel):
+    answer: str = Field(min_length=1, max_length=20000)
+
+
+class QuickAnalyzeResponse(BaseModel):
+    problem: str = Field(..., min_length=1)
+    possible_cause: str = Field(..., min_length=1)
+    solution: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+

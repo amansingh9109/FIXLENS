@@ -9,10 +9,11 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from .config import MAX_IMAGE_BYTES
-from .schemas import ActionFeedback, CreateSessionRequest, EvidenceUploadResponse, VerificationInput
-from .ai_service import analyze as call_gemini_analysis, verify as call_gemini_verification
+from .schemas import ActionFeedback, CreateSessionRequest, EvidenceUploadResponse, QuickAnalyzeResponse, VerificationInput
+from .ai_service import analyze as call_gemini_analysis, verify as call_gemini_verification, chat as call_chat, quick_analyze as call_quick_analyze
 from .evidence import validate_image
 from .safety import apply_safety
 from . import storage
@@ -29,6 +30,7 @@ app.add_middleware(
         os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/"),
     ])),
     allow_credentials=True,
+    allow_origin_regex=r"^chrome-extension://.*$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -66,6 +68,90 @@ def normalise_object(description: str) -> str:
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/v1/quick-analyze", response_model=QuickAnalyzeResponse)
+async def quick_analyze(
+    image: UploadFile = File(...),
+    question: str = Form(default="Explain what appears to be wrong in this selected area and how I can fix it."),
+    page_url: str = Form(default=""),
+    page_title: str = Form(default=""),
+) -> QuickAnalyzeResponse:
+    try:
+        data = await image.read(MAX_IMAGE_BYTES + 1)
+        validate_image(data, image.content_type or "image/png", image.filename or "screenshot.png")
+    finally:
+        await image.close()
+
+    result = await run_in_threadpool(
+        call_quick_analyze,
+        image_bytes=data,
+        mime_type=image.content_type or "image/png",
+        question=question,
+        page_url=page_url,
+        page_title=page_title,
+    )
+    return result
+
+
+@app.post("/api/v1/chat")
+async def send_chat(
+    message: str = Form(default="", max_length=12000),
+    request_id: str = Form(..., min_length=1, max_length=100),
+    session_id: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+) -> dict[str, Any]:
+    if not message.strip() and file is None:
+        raise HTTPException(422, "Write a message or attach a screenshot.")
+    # A stable request ID makes retries reuse the conversation and uploaded image.
+    if session_id is None:
+        from uuid import UUID
+        try:
+            session_id = "CHAT-" + str(UUID(request_id))
+        except ValueError:
+            raise HTTPException(422, "A valid request ID is required for a new chat.")
+        session = storage.load_session(session_id)
+        if not session:
+            session = {"session_id": session_id, "description": message.strip() or "Help with this screenshot.",
+                       "status": "chatting", "evidence": [], "messages": [], "timeline": [],
+                       "created_at": utc_now(), "updated_at": utc_now()}
+    else:
+        session = storage.load_session(session_id)
+        if not session:
+            raise HTTPException(404, "Chat not found")
+    messages = session.setdefault("messages", [])
+    completed = next((item for item in messages if item["id"] == request_id + "-reply"), None)
+    if completed:
+        if file:
+            await file.close()
+        return {"session_id": session_id, "messages": messages}
+    existing = next((item for item in messages if item["id"] == request_id), None)
+    if not existing:
+        if messages and messages[-1]["role"] == "user":
+            raise HTTPException(409, "Retry the unanswered message before sending another one.")
+        evidence_id = None
+        if file:
+            try:
+                data = await file.read(MAX_IMAGE_BYTES + 1)
+                validate_image(data, file.content_type, file.filename or "")
+                evidence_id = str(uuid4())
+                storage.save_evidence(evidence_id, session_id, data, file.content_type)
+                session["evidence"].append({"id": evidence_id, "stage": "INITIAL" if not messages else "ADDITIONAL",
+                    "file_name": file.filename, "description": message, "type": "image",
+                    "url": f"/api/v1/sessions/{session_id}/evidence/{evidence_id}", "created_at": utc_now()})
+            finally:
+                await file.close()
+        messages.append({"id": request_id, "role": "user", "content": message.strip() or "Help me with this screenshot.",
+                         "evidence_id": evidence_id, "created_at": utc_now()})
+        storage.save_session(session)
+    elif file:
+        await file.close()
+    result = await run_in_threadpool(call_chat, session)
+    messages.append({"id": request_id + "-reply", "role": "assistant", "content": result.answer, "created_at": utc_now()})
+    session["status"] = "chatting"
+    session["updated_at"] = utc_now()
+    storage.save_session(session)
+    return {"session_id": session_id, "messages": messages}
 
 
 @app.post("/api/v1/sessions")

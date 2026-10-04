@@ -334,3 +334,54 @@ def test_new_evidence_invalidates_previous_verification():
     session = client.get(f"/api/v1/sessions/{session_id}").json()
     assert session["verification_result"] is None
     assert session["status"] == "evidence_added"
+
+
+def test_quick_analyze_success(monkeypatch):
+    image = BytesIO()
+    Image.new("RGB", (32, 32)).save(image, format="PNG")
+
+    def fake_generate_content(**kwargs):
+        return SimpleNamespace(text=json.dumps({
+            "problem": "Submit button overlaps the input field.",
+            "possible_cause": "Incorrect absolute positioning on form controls.",
+            "solution": ["Inspect button CSS position", "Check parent container width"],
+            "confidence": 0.85
+        }))
+
+    class FakeClient:
+        models = SimpleNamespace(generate_content=fake_generate_content)
+
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(ai_service.genai, "Client", FakeClient)
+
+    response = client.post(
+        "/api/v1/quick-analyze",
+        files={"image": ("screenshot.png", image.getvalue(), "image/png")},
+        data={"question": "Why is this overlapping?", "page_url": "http://localhost:3000", "page_title": "Test Page"}
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["problem"] == "Submit button overlaps the input field."
+    assert data["possible_cause"] == "Incorrect absolute positioning on form controls."
+    assert len(data["solution"]) == 2
+    assert data["confidence"] == 0.85
+
+
+def test_quick_analyze_missing_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    image = BytesIO()
+    Image.new("RGB", (32, 32)).save(image, format="PNG")
+    response = client.post(
+        "/api/v1/quick-analyze",
+        files={"image": ("screenshot.png", image.getvalue(), "image/png")}
+    )
+    assert response.status_code == 503
+
