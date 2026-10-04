@@ -1,139 +1,53 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
-
-/* 1. Midnight Neon Theme */
-:root, .theme-neon {
-  --bg-page: #07080c;
-  --bg-card: #0b0c13;
-  --bg-nested: #080911;
-  --bg-badge: rgba(88, 28, 135, 0.25);
-  --border-badge: rgba(168, 85, 247, 0.25);
-  --text-badge: #d8b4fe;
-  --border-color: rgba(255, 255, 255, 0.08);
-  --heading-grad: linear-gradient(to right, #d8b4fe, #a78bfa, #38bdf8);
-  --btn-grad: linear-gradient(to right, #6366f1, #7c3aed, #9333ea);
-  --btn-shadow: 0 0 25px rgba(124, 58, 237, 0.45);
-  --radar-ring-1: #c084fc;
-  --radar-ring-2: #38bdf8;
-  --signal-color: #fbbf24;
-  --status-color: #c084fc;
-  --accent-icon: #a855f7;
-  --accent-icon-2: #38bdf8;
-  --accent-icon-3: #34d399;
-  --ambient-glow: rgba(124, 58, 237, 0.15);
-  --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  --grid-line: rgba(255, 255, 255, 0.04);
+:root {
+  --background: #f7f7f2;
+  --foreground: #292d27;
 }
 
-/* 2. Cyber Emerald Theme */
-.theme-emerald {
-  --bg-page: #020b06;
-  --bg-card: #05180d;
-  --bg-nested: #031008;
-  --bg-badge: rgba(6, 78, 59, 0.35);
-  --border-badge: rgba(16, 185, 129, 0.3);
-  --text-badge: #6ee7b7;
-  --border-color: rgba(16, 185, 129, 0.18);
-  --heading-grad: linear-gradient(to right, #a7f3d0, #34d399, #10b981);
-  --btn-grad: linear-gradient(to right, #059669, #10b981, #14b8a6);
-  --btn-shadow: 0 0 25px rgba(16, 185, 129, 0.45);
-  --radar-ring-1: #34d399;
-  --radar-ring-2: #2dd4bf;
-  --signal-color: #a3e635;
-  --status-color: #34d399;
-  --accent-icon: #10b981;
-  --accent-icon-2: #2dd4bf;
-  --accent-icon-3: #4ade80;
-  --ambient-glow: rgba(16, 185, 129, 0.18);
-  --text-primary: #f0fdf4;
-  --text-secondary: #86efac;
-  --text-muted: #4ade80;
-  --grid-line: rgba(16, 185, 129, 0.06);
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
-/* 3. Electric Blue Theme */
-.theme-blue {
-  --bg-page: #030816;
-  --bg-card: #061128;
-  --bg-nested: #040b1b;
-  --bg-badge: rgba(30, 58, 138, 0.35);
-  --border-badge: rgba(56, 189, 248, 0.3);
-  --text-badge: #7dd3fc;
-  --border-color: rgba(56, 189, 248, 0.18);
-  --heading-grad: linear-gradient(to right, #7dd3fc, #38bdf8, #60a5fa);
-  --btn-grad: linear-gradient(to right, #0284c7, #2563eb, #3b82f6);
-  --btn-shadow: 0 0 25px rgba(56, 189, 248, 0.45);
-  --radar-ring-1: #38bdf8;
-  --radar-ring-2: #60a5fa;
-  --signal-color: #fde047;
-  --status-color: #38bdf8;
-  --accent-icon: #38bdf8;
-  --accent-icon-2: #60a5fa;
-  --accent-icon-3: #34d399;
-  --ambient-glow: rgba(56, 189, 248, 0.18);
-  --text-primary: #f0f9ff;
-  --text-secondary: #93c5fd;
-  --text-muted: #60a5fa;
-  --grid-line: rgba(56, 189, 248, 0.06);
+html {
+  scroll-behavior: smooth;
 }
 
-/* 4. Diagnostic Light Theme */
-.theme-light, .light {
-  --bg-page: #f8fafc;
-  --bg-card: #ffffff;
-  --bg-nested: #f1f5f9;
-  --bg-badge: rgba(226, 232, 240, 0.8);
-  --border-badge: rgba(148, 163, 184, 0.3);
-  --text-badge: #475569;
-  --border-color: rgba(0, 0, 0, 0.08);
-  --heading-grad: linear-gradient(to right, #0f172a, #334155, #6366f1);
-  --btn-grad: linear-gradient(to right, #0f172a, #1e293b, #334155);
-  --btn-shadow: 0 4px 15px rgba(15, 23, 42, 0.15);
-  --radar-ring-1: #6366f1;
-  --radar-ring-2: #0284c7;
-  --signal-color: #d97706;
-  --status-color: #4f46e5;
-  --accent-icon: #4f46e5;
-  --accent-icon-2: #0284c7;
-  --accent-icon-3: #059669;
-  --ambient-glow: rgba(99, 102, 241, 0.08);
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
-  --grid-line: rgba(0, 0, 0, 0.05);
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  line-height: 1.65;
 }
 
-@layer base {
-  body {
-    background-color: var(--bg-page);
-    color: var(--text-primary);
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
-  }
+* {
+  box-sizing: border-box;
 }
 
-.bg-radar-grid {
-  background-size: 32px 32px;
-  background-image: 
-    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+::selection {
+  background: #dce5d5;
 }
 
-@keyframes pulse-slow {
-  0%, 100% {
-    opacity: 0.85;
-    transform: scale(1) rotate(0deg);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.03) rotate(3deg);
-  }
-}
+button, input, textarea { font: inherit; }
+button, summary { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .6; }
+a, button, input, textarea, summary { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid #526747; outline-offset: 4px; }
 
-.animate-pulse-slow {
-  animation: pulse-slow 8s ease-in-out infinite;
+@layer components {
+  .page-shell { @apply mx-auto w-full max-w-5xl px-5 py-10 sm:px-8 sm:py-14; }
+  .page-title { @apply text-3xl font-semibold tracking-tight sm:text-4xl; }
+  .section-title { @apply text-lg font-semibold; }
+  .muted { @apply text-sm text-stone-500; }
+  .surface { @apply rounded-lg border border-stone-200 bg-white p-6 sm:p-8; }
+  .button-primary { @apply inline-flex items-center justify-center rounded-md bg-[#465c3e] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#35472f] disabled:opacity-60; }
+  .button-secondary { @apply inline-flex items-center justify-center rounded-md border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50; }
+  .field { @apply w-full rounded-md border border-stone-300 bg-white px-4 py-3 text-base text-stone-800 outline-none focus:border-[#526747] disabled:bg-stone-50; }
+  .notice-error { @apply rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800; }
+  .notice-warning { @apply rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900; }
+  .section-divider { @apply border-t border-stone-200 pt-7; }
 }

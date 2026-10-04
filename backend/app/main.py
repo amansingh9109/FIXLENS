@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Any
+from uuid import uuid4
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+
+from .config import MAX_IMAGE_BYTES
+from .schemas import CreateSessionRequest, EvidenceUploadResponse, VerificationInput
+from .ai_service import analyze as call_gemini_analysis
+from .evidence import validate_image
+from .safety import apply_safety
+from . import storage
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+
+app = FastAPI(title="FixLens API", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(dict.fromkeys([
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:3001", "http://127.0.0.1:3001",
+        os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/"),
+    ])),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def create_event(event_type: str, description: str) -> dict[str, str]:
+    return {
+        "id": str(uuid4()),
+        "timestamp": utc_now(),
+        "type": event_type,
+        "description": description,
+    }
+
+
+def generate_session_id() -> str:
+    return f"FL-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex.upper()}"
+
+
+def normalise_object(description: str) -> str:
+    lowered = description.lower()
+    if "bicycle" in lowered or "bike" in lowered or "chain" in lowered or "derailleur" in lowered:
+        return "Bicycle"
+    if "computer" in lowered or "laptop" in lowered or "keyboard" in lowered:
+        return "Computer"
+    if "table" in lowered or "chair" in lowered or "cabinet" in lowered or "furniture" in lowered:
+        return "Furniture"
+    if "appliance" in lowered or "washer" in lowered or "dryer" in lowered or "fridge" in lowered:
+        return "Appliance"
+    return "Object"
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/sessions")
+def create_session(payload: CreateSessionRequest) -> dict[str, str]:
+    session_id = generate_session_id()
+    session = {
+        "session_id": session_id,
+        "description": payload.description,
+        "user_description": payload.description,
+        "status": "created",
+        "object_category": normalise_object(payload.description),
+        "risk_level": "UNKNOWN",
+        "observations": [],
+        "hypotheses": [],
+        "repair_steps": [],
+        "evidence": [],
+        "timeline": [create_event("session_created", "Repair session created")],
+        "verification_result": None,
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    storage.save_session(session)
+    logger.info("session created id=%s", session_id)
+    return {"session_id": session_id, "status": "created"}
+
+
+@app.get("/api/v1/sessions/{session_id}")
+def get_session(session_id: str) -> dict[str, Any]:
+    session = storage.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.post("/api/v1/sessions/{session_id}/evidence")
+async def upload_evidence(
+    session_id: str,
+    file: UploadFile | None = File(default=None),
+    description: str = Form(default=""),
+    evidence_type: str = Form(default="image"),
+    stage: str = Form(default="INITIAL"),
+) -> EvidenceUploadResponse:
+    session = storage.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if evidence_type != "image":
+        raise HTTPException(status_code=422, detail="Only image evidence is supported.")
+    if file is None:
+        raise HTTPException(status_code=422, detail="An evidence image is required.")
+    if stage not in {"INITIAL", "ADDITIONAL", "FINAL"}:
+        raise HTTPException(422, "Invalid evidence stage.")
+    logger.info("evidence upload started session=%s", session_id)
+    try:
+        data = await file.read(MAX_IMAGE_BYTES + 1)
+        validate_image(data, file.content_type, file.filename or "")
+    finally:
+        await file.close()
+
+    evidence_id = str(uuid4())
+    storage.save_evidence(evidence_id, session_id, data, file.content_type)
+    item = {
+        "id": evidence_id,
+        "session_id": session_id,
+        "type": evidence_type,
+        "file_name": file.filename if file else "n/a",
+        "description": description or "Uploaded evidence",
+        "stage": stage,
+        "url": f"/api/v1/sessions/{session_id}/evidence/{evidence_id}",
+        "created_at": utc_now(),
+    }
+    session["evidence"].append(item)
+    session["timeline"].append(create_event("evidence_uploaded", f"Evidence uploaded: {item['type']}"))
+    session["updated_at"] = utc_now()
+    storage.save_session(session)
+    logger.info("evidence stored session=%s evidence=%s", session_id, evidence_id)
+    return EvidenceUploadResponse(status="uploaded", evidence_id=evidence_id)
+
+
+@app.post("/api/v1/sessions/{session_id}/analyze")
+def analyze_session(session_id: str) -> dict[str, Any]:
+    session = storage.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    logger.info("analysis started session=%s", session_id)
+    files = {item["id"]: storage.load_evidence(item["id"], session_id) for item in session["evidence"]}
+    if any(value is None for value in files.values()):
+        raise HTTPException(409, "Evidence is missing. Please upload it again.")
+    try:
+        result = call_gemini_analysis(session["description"], session["evidence"], files, session.get("analysis"))
+        result = apply_safety(result, session["description"], session["evidence"])
+    except HTTPException as exc:
+        session["analysis_error"] = exc.detail
+        storage.save_session(session)
+        logger.warning("analysis failed session=%s status=%s", session_id, exc.status_code)
+        raise
+    session["analysis_error"] = None
+    session["status"] = "analyzed"
+    session["risk_level"] = result.risk_level
+    session["object_category"] = result.object_name
+    session["observations"] = [obs.model_dump() for obs in result.observations]
+    if "initial_observations" not in session:
+        session["initial_observations"] = session["observations"]
+    session["hypotheses"] = [hyp.model_dump() for hyp in result.hypotheses]
+    session["repair_steps"] = [step.model_dump() for step in result.repair_steps]
+    session["analysis"] = result.model_dump()
+    session["timeline"].append(create_event("analysis_complete", "Initial multimodal investigation completed"))
+    session["updated_at"] = utc_now()
+    storage.save_session(session)
+    logger.info("analysis stored session=%s", session_id)
+    return result.model_dump()
+
+
+@app.post("/api/v1/sessions/{session_id}/verify")
+def verify_session(session_id: str, payload: VerificationInput) -> dict[str, str]:
+    session = storage.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    note = (payload.final_note or "").lower()
+    if "not resolved" in note or "not better" in note or "not improved" in note:
+        verification_result = "UNCHANGED"
+    elif "better" in note or "improved" in note or "resolved" in note:
+        verification_result = "LIKELY_RESOLVED"
+    elif "worse" in note or "worsened" in note:
+        verification_result = "WORSE"
+    elif "unchanged" in note or "same" in note:
+        verification_result = "UNCHANGED"
+    else:
+        verification_result = "UNCERTAIN"
+
+    session["status"] = "verified"
+    session["verification_result"] = verification_result
+    session["timeline"].append(create_event("verification_complete", "Final verification completed"))
+    session["updated_at"] = utc_now()
+    session["final_note"] = payload.final_note
+    session["verification_evidence_ids"] = [item["id"] for item in session["evidence"] if item["stage"] == "FINAL"]
+    storage.save_session(session)
+    return {"verification_result": verification_result, "status": "verified"}
+
+
+@app.get("/api/v1/sessions/{session_id}/report")
+def get_report(session_id: str) -> dict[str, Any]:
+    session = storage.load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    original_problem = session["description"]
+    report = {
+        "session_id": session_id,
+        "object": session.get("object_category", "Object"),
+        "original_problem": original_problem,
+        "initial_observations": session.get("initial_observations", session.get("observations", [])),
+        "possible_causes": session.get("hypotheses", []),
+        "evidence_collected": session.get("evidence", []),
+        "actions_performed": session.get("repair_steps", []),
+        "verification_result": session.get("verification_result") or "UNCERTAIN",
+        "remaining_concerns": "Verification is based on your report, not a guarantee of repair or safety.",
+        "safety_notes": session.get("analysis", {}).get("safety", {}).get("warning") or "Safety has not been established.",
+        "date": session.get("created_at", utc_now()),
+    }
+    return report
+
+
+@app.get("/api/v1/sessions/{session_id}/evidence/{evidence_id}")
+def get_evidence(session_id: str, evidence_id: str):
+    session = storage.load_session(session_id)
+    if not session or not any(item["id"] == evidence_id for item in session["evidence"]):
+        raise HTTPException(404, "Evidence not found")
+    stored = storage.load_evidence(evidence_id, session_id)
+    if not stored:
+        raise HTTPException(404, "Evidence not found")
+    return Response(stored[0], media_type=stored[1], headers={"X-Content-Type-Options": "nosniff"})

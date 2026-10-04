@@ -1,152 +1,90 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Loader2, Info, Sparkles, Lock } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ImageUploader } from "@/components/ImageUploader";
+import Link from "next/link";
+import { FormEvent, useRef, useState } from "react";
+import EvidencePicker from "@/components/evidence-picker";
+import { analyzeSession, createSession, uploadEvidence } from "@/lib/api";
 
 export default function InvestigatePage() {
   const router = useRouter();
-  const [image, setImage] = useState<File | null>(null);
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(
+    "",
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState("");
+  const pending = useRef({ sessionId: "", uploaded: false });
+  const busy = useRef(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!image) {
-      setError("Please upload an image first.");
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (busy.current) return;
+    setError("");
+
+    if (!description.trim() || description.trim().length < 10) {
+      setError("Please describe the problem in at least 10 characters.");
       return;
     }
-    if (description.length < 10) {
-      setError("Please describe the problem with at least 10 characters.");
-      return;
-    }
 
-    setError(null);
+    if (!file) { setError("Please select an evidence image."); return; }
+    busy.current = true;
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const mockSessionId = `FL-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-      router.push(`/session/${mockSessionId}`);
-    }, 1500);
-  };
+    try {
+      if (!pending.current.sessionId) {
+        setProgress("Starting your repair notes...");
+        const data = await createSession(description.trim());
+        pending.current.sessionId = data.session_id;
+      }
+      if (!pending.current.uploaded) {
+        setProgress("Uploading your photo...");
+        await uploadEvidence(pending.current.sessionId, file, description.trim());
+        pending.current.uploaded = true;
+      }
+      setProgress("Looking at your photo and checking safety...");
+      await analyzeSession(pending.current.sessionId);
+      setProgress("Getting your notes ready...");
+      router.push(`/session/${encodeURIComponent(pending.current.sessionId)}`);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "The investigation could not start. Please try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
+      busy.current = false;
+      setProgress("");
+    }
+  }
 
   return (
-    <div className="flex-1 w-full max-w-3xl mx-auto py-4 sm:py-8 animate-in fade-in slide-in-from-bottom-6 duration-500">
-      <div className="mb-8">
-        <div 
-          className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full border text-xs font-mono tracking-wider uppercase mb-3 transition-colors duration-300"
-          style={{
-            backgroundColor: "var(--bg-badge)",
-            borderColor: "var(--border-badge)",
-            color: "var(--text-badge)"
-          }}
-        >
-          <Sparkles className="w-3.5 h-3.5" style={{ color: "var(--accent-icon)" }} />
-          <span>New Session</span>
-        </div>
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mb-2" style={{ color: "var(--text-primary)" }}>
-          Start Investigation
-        </h1>
-        <p className="text-sm sm:text-base" style={{ color: "var(--text-secondary)" }}>
-          Provide visual evidence and describe what you observe.
-        </p>
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div 
-          className="rounded-2xl border p-6 shadow-2xl overflow-hidden transition-all duration-300"
-          style={{
-            backgroundColor: "var(--bg-card)",
-            borderColor: "var(--border-color)"
-          }}
-        >
-          <div className="pb-4">
-            <div className="text-xs font-mono tracking-widest uppercase mb-1" style={{ color: "var(--accent-icon)" }}>
-              Step 01
-            </div>
-            <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>Upload Evidence</h2>
-            <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>
-              Provide a clear photo of the object and the component experiencing issues.
-            </p>
-          </div>
-          <div className="mt-2">
-            <ImageUploader onImageSelected={setImage} />
+    <main className="page-shell max-w-3xl">
+      <Link href="/" className="muted hover:text-stone-800">Back home</Link>
+      <h1 className="page-title mt-5">What needs fixing?</h1>
+      <p className="mt-3 text-stone-600">Tell us a little about the problem and add a clear photo.</p>
+      <form onSubmit={handleSubmit} className="surface mt-8 space-y-7">
+        <div>
+          <label htmlFor="problem" className="mb-2 block font-medium">What are you trying to fix?</label>
+          <textarea id="problem" value={description} disabled={isSubmitting} rows={5} maxLength={2000}
+            onChange={event => { setDescription(event.target.value); pending.current = { sessionId: "", uploaded: false }; }}
+            className="field" placeholder="For example: My bike chain falls off when I change gears." />
+          <div className="mt-2 flex justify-between gap-4 text-xs text-stone-500">
+            <span>What happens? When did it start?</span><span>{description.length}/2000</span>
           </div>
         </div>
-
-        <div 
-          className="rounded-2xl border p-6 shadow-2xl transition-all duration-300"
-          style={{
-            backgroundColor: "var(--bg-card)",
-            borderColor: "var(--border-color)"
-          }}
-        >
-          <div className="pb-4">
-            <div className="text-xs font-mono tracking-widest uppercase mb-1" style={{ color: "var(--accent-icon-2)" }}>
-              Step 02
-            </div>
-            <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>Problem Description</h2>
-            <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>
-              Explain the symptoms in natural words without worrying about technical terms.
-            </p>
-          </div>
-          <Textarea
-            placeholder="e.g. My bicycle chain keeps falling when I shift to higher gears..."
-            className="min-h-[120px] text-base focus-visible:ring-1 rounded-xl transition-colors duration-300"
-            style={{
-              backgroundColor: "var(--bg-nested)",
-              borderColor: "var(--border-color)",
-              color: "var(--text-primary)"
-            }}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </div>
-
-        {error && (
-          <Alert variant="destructive" className="rounded-xl">
-            <Info className="h-4 w-4" />
-            <AlertTitle>Missing Information</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
-          <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-            <Lock className="w-3.5 h-3.5" />
-            <span>Encrypted local session</span>
-          </div>
-
-          <Button
-            type="submit"
-            size="lg"
-            disabled={isSubmitting}
-            className="w-full sm:w-auto h-12 px-8 text-sm font-medium text-white hover:brightness-110 transition-all rounded-xl border border-white/10"
-            style={{
-              backgroundImage: "var(--btn-grad)",
-              boxShadow: "var(--btn-shadow)"
-            }}
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Processing Evidence...
-              </>
-            ) : (
-              <>
-                Begin Investigation
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </>
-            )}
-          </Button>
+        <EvidencePicker file={file} disabled={isSubmitting} onChange={selected => { setFile(selected); pending.current = { sessionId: "", uploaded: false }; }} label="Add a photo" />
+        {progress && <p role="status" aria-live="polite" className="text-sm text-[#465c3e]">{progress}</p>}
+        {error && <div role="alert" className="notice-error">{error}</div>}
+        <div className="flex flex-wrap items-center gap-4 border-t border-stone-200 pt-6">
+          <button type="submit" disabled={isSubmitting} className="button-primary">
+            {isSubmitting ? "Working on it..." : error ? "Try again" : "Check this problem"}
+          </button>
+          <span className="muted">You can add more photos later.</span>
         </div>
       </form>
-    </div>
+    </main>
   );
 }
