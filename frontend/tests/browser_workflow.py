@@ -73,9 +73,11 @@ def main():
         page.get_by_label("What changed?").fill("The chain is unchanged.")
         page.locator('input[type="file"]').set_input_files(str(image))
         page.get_by_role("button", name="Verify repair", exact=True).click()
-        page.wait_for_url("**/report", timeout=30000)
-        expect(page.get_by_text("Verification: UNCHANGED", exact=True)).to_be_visible()
+        page.wait_for_url("**/report", timeout=150000)
         verified = httpx.get(f"{BACKEND}/api/v1/sessions/{session_id}").json()
+        assert verified["verification_result"] in {"UNCHANGED", "UNCERTAIN"}
+        expect(page.get_by_text(f"Verification: {verified['verification_result']}", exact=True)).to_be_visible()
+        expect(page.get_by_text(verified["verification_explanation"], exact=True)).to_be_visible()
         assert verified["verification_evidence_ids"]
         final = next(item for item in verified["evidence"] if item["stage"] == "FINAL")
         assert httpx.get(BACKEND + final["url"]).content == image.read_bytes()

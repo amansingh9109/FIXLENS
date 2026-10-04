@@ -36,8 +36,14 @@ The existing API flow is:
 4. GET `/api/v1/sessions/{id}` restores the stored investigation. Evidence URLs
    serve the uploaded images without encoding their bytes into session JSON.
 5. Additional uploads and another analysis update the same investigation.
-6. Verification preserves the final note and final evidence references. It remains
-   based on the user's reported outcome, not an AI comparison or guarantee.
+6. POST `/api/v1/sessions/{id}/actions/{step_number}/complete` with an `outcome`
+   (`COMPLETED`, `IMPROVED`, `UNCHANGED`, `WORSE`, or `CANNOT_PERFORM`) records
+   step feedback. Only LOW/MEDIUM risk sessions permit repair actions. Recorded
+   actions remain in the report and inform subsequent analysis.
+7. Verification compares INITIAL and FINAL image bytes with the model when both
+   exist. Without both, it records the user's reported outcome and clearly labels
+   that limitation. The saved explanation appears in the report. Neither method
+   guarantees that the object functions correctly or is safe.
 
 Images must have matching MIME type, extension, and decoded JPEG/PNG/WebP format,
 be nonempty, and be at most 10 MB. Pillow verifies and safely decodes the image;

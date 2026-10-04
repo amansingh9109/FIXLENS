@@ -58,7 +58,16 @@ class InvestigationResponse(BaseModel):
 
 
 class VerificationInput(BaseModel):
-    final_note: str | None = None
+    final_note: str | None = Field(default=None, max_length=2000)
+
+
+class VerificationResult(BaseModel):
+    verification_result: Literal["LIKELY_RESOLVED", "IMPROVED", "UNCHANGED", "WORSE", "UNCERTAIN"]
+    explanation: str = Field(min_length=1, max_length=3000)
+
+
+class ActionFeedback(BaseModel):
+    outcome: Literal["COMPLETED", "IMPROVED", "UNCHANGED", "WORSE", "CANNOT_PERFORM"]
 
 
 class EvidenceUploadResponse(BaseModel):

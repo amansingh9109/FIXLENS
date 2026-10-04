@@ -56,7 +56,7 @@ export default function VerifyPage() {
             className="field" placeholder="What did you try? Is the problem better, worse, or unchanged?" />
         </div>
         <EvidencePicker file={file} disabled={isSubmitting} onChange={selected => { setFile(selected); uploaded.current = false; }} label="Add a photo of the result (optional)" />
-        <p className="muted">This records your reported outcome. It can’t guarantee that the repair worked or that the item is safe.</p>
+        <p className="muted">If before and after photos are available, we compare visible changes. Otherwise, we record your note. Neither can guarantee that the item works or is safe.</p>
         {error && <div role="alert" className="notice-error">{error}</div>}
         <div className="flex flex-wrap items-center gap-4 border-t border-stone-200 pt-6">
           <button type="submit" disabled={isSubmitting} className="button-primary">{isSubmitting ? "Saving..." : "Verify repair"}</button>

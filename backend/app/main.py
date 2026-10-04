@@ -11,8 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from .config import MAX_IMAGE_BYTES
-from .schemas import CreateSessionRequest, EvidenceUploadResponse, VerificationInput
-from .ai_service import analyze as call_gemini_analysis
+from .schemas import ActionFeedback, CreateSessionRequest, EvidenceUploadResponse, VerificationInput
+from .ai_service import analyze as call_gemini_analysis, verify as call_gemini_verification
 from .evidence import validate_image
 from .safety import apply_safety
 from . import storage
@@ -138,6 +138,10 @@ async def upload_evidence(
         "created_at": utc_now(),
     }
     session["evidence"].append(item)
+    session["verification_result"] = None
+    session.pop("verification_explanation", None)
+    if session["status"] == "verified":
+        session["status"] = "evidence_added"
     session["timeline"].append(create_event("evidence_uploaded", f"Evidence uploaded: {item['type']}"))
     session["updated_at"] = utc_now()
     storage.save_session(session)
@@ -156,7 +160,10 @@ def analyze_session(session_id: str) -> dict[str, Any]:
     if any(value is None for value in files.values()):
         raise HTTPException(409, "Evidence is missing. Please upload it again.")
     try:
-        result = call_gemini_analysis(session["description"], session["evidence"], files, session.get("analysis"))
+        previous = session.get("analysis")
+        if previous:
+            previous = {**previous, "recorded_actions": session.get("action_history", [])}
+        result = call_gemini_analysis(session["description"], session["evidence"], files, previous)
         result = apply_safety(result, session["description"], session["evidence"])
     except HTTPException as exc:
         session["analysis_error"] = exc.detail
@@ -173,11 +180,35 @@ def analyze_session(session_id: str) -> dict[str, Any]:
     session["hypotheses"] = [hyp.model_dump() for hyp in result.hypotheses]
     session["repair_steps"] = [step.model_dump() for step in result.repair_steps]
     session["analysis"] = result.model_dump()
+    session["verification_result"] = None
+    session.pop("verification_explanation", None)
     session["timeline"].append(create_event("analysis_complete", "Initial multimodal investigation completed"))
     session["updated_at"] = utc_now()
     storage.save_session(session)
     logger.info("analysis stored session=%s", session_id)
     return result.model_dump()
+
+
+@app.post("/api/v1/sessions/{session_id}/actions/{action_id}/complete")
+def complete_action(session_id: str, action_id: int, payload: ActionFeedback) -> dict[str, Any]:
+    session = storage.load_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session["risk_level"] not in {"LOW", "MEDIUM"}:
+        raise HTTPException(409, "Safety must be assessed before recording a repair action.")
+    step = next((item for item in session["repair_steps"] if item["step_number"] == action_id), None)
+    if not step:
+        raise HTTPException(404, "Repair step not found")
+    step["status"] = "BLOCKED" if payload.outcome == "CANNOT_PERFORM" else "COMPLETED"
+    step["outcome"] = payload.outcome
+    session.setdefault("action_history", []).append({**step, "recorded_at": utc_now()})
+    session["verification_result"] = None
+    session.pop("verification_explanation", None)
+    session["status"] = "repair_in_progress"
+    session["updated_at"] = utc_now()
+    session["timeline"].append(create_event("action_recorded", f"Step {action_id}: {payload.outcome.lower().replace('_', ' ')}"))
+    storage.save_session(session)
+    return step
 
 
 @app.post("/api/v1/sessions/{session_id}/verify")
@@ -189,23 +220,36 @@ def verify_session(session_id: str, payload: VerificationInput) -> dict[str, str
     note = (payload.final_note or "").lower()
     if "not resolved" in note or "not better" in note or "not improved" in note:
         verification_result = "UNCHANGED"
-    elif "better" in note or "improved" in note or "resolved" in note:
-        verification_result = "LIKELY_RESOLVED"
     elif "worse" in note or "worsened" in note:
         verification_result = "WORSE"
+    elif "better" in note or "improved" in note:
+        verification_result = "IMPROVED"
+    elif "resolved" in note:
+        verification_result = "LIKELY_RESOLVED"
     elif "unchanged" in note or "same" in note:
         verification_result = "UNCHANGED"
     else:
         verification_result = "UNCERTAIN"
 
+    explanation = "Outcome recorded from your note; no before-and-after photo comparison was possible."
+    initial = [item for item in session["evidence"] if item["stage"] == "INITIAL"]
+    final = [item for item in session["evidence"] if item["stage"] == "FINAL"]
+    if initial and final:
+        files = {item["id"]: storage.load_evidence(item["id"], session_id) for item in initial + final}
+        if any(value is None for value in files.values()):
+            raise HTTPException(409, "Evidence is missing. Please upload it again.")
+        comparison = call_gemini_verification(session, payload.final_note, files)
+        verification_result = comparison.verification_result
+        explanation = comparison.explanation
     session["status"] = "verified"
     session["verification_result"] = verification_result
     session["timeline"].append(create_event("verification_complete", "Final verification completed"))
     session["updated_at"] = utc_now()
     session["final_note"] = payload.final_note
+    session["verification_explanation"] = explanation
     session["verification_evidence_ids"] = [item["id"] for item in session["evidence"] if item["stage"] == "FINAL"]
     storage.save_session(session)
-    return {"verification_result": verification_result, "status": "verified"}
+    return {"verification_result": verification_result, "explanation": explanation, "status": "verified"}
 
 
 @app.get("/api/v1/sessions/{session_id}/report")
@@ -222,9 +266,10 @@ def get_report(session_id: str) -> dict[str, Any]:
         "initial_observations": session.get("initial_observations", session.get("observations", [])),
         "possible_causes": session.get("hypotheses", []),
         "evidence_collected": session.get("evidence", []),
-        "actions_performed": session.get("repair_steps", []),
+        "actions_performed": session.get("action_history", []),
+        "verification_explanation": session.get("verification_explanation"),
         "verification_result": session.get("verification_result") or "UNCERTAIN",
-        "remaining_concerns": "Verification is based on your report, not a guarantee of repair or safety.",
+        "remaining_concerns": "Photos and reported outcomes cannot guarantee repair success or safety.",
         "safety_notes": session.get("analysis", {}).get("safety", {}).get("warning") or "Safety has not been established.",
         "date": session.get("created_at", utc_now()),
     }

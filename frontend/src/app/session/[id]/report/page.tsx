@@ -12,6 +12,8 @@ type ReportData = {
   initial_observations?: Array<{ description?: string }>;
   possible_causes?: Array<{ cause?: string }>;
   verification_result?: string;
+  verification_explanation?: string;
+  actions_performed?: Array<{ title: string; outcome: string }>;
   remaining_concerns?: string;
   safety_notes?: string;
   date?: string;
@@ -55,6 +57,7 @@ export default function ReportPage() {
           <h2 className="section-title">{report.object || "Your repair"}</h2>
           <p className="mt-3 text-stone-600">{report.original_problem}</p>
           <p className="mt-4 text-sm font-medium">Verification: {report.verification_result || "UNCERTAIN"}</p>
+          {report.verification_explanation && <p className="mt-3 text-stone-600">{report.verification_explanation}</p>}
         </section>
         <section className="section-divider">
           <h2 className="section-title">What we observed</h2>
@@ -64,6 +67,7 @@ export default function ReportPage() {
           <h2 className="section-title">Possible causes</h2>
           <ul className="mt-3 space-y-3 text-stone-600">{report.possible_causes?.map((item, index) => <li key={index}>{item.cause}</li>)}</ul>
         </section>
+        {!!report.actions_performed?.length && <section className="section-divider"><h2 className="section-title">What you tried</h2><ul className="mt-3 space-y-3 text-stone-600">{report.actions_performed.map((item, index) => <li key={index}>{item.title}: {item.outcome.toLowerCase().replaceAll("_", " ")}</li>)}</ul></section>}
         <section className="section-divider"><h2 className="section-title">Safety notes</h2><p className="mt-3 text-stone-600">{report.safety_notes}</p></section>
         <section className="section-divider"><h2 className="section-title">Keep in mind</h2><p className="mt-3 text-stone-600">{report.remaining_concerns}</p></section>
         <details className="section-divider text-xs text-stone-500"><summary>Repair reference</summary><p className="mt-3 break-all">{report.session_id}</p></details>

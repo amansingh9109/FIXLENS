@@ -1,5 +1,30 @@
 # FixLens investigation workflow repair
 
+Latest validation after merging `main` into `aman` (4 October 2026):
+
+- Main work committed as `c822f22`; merge committed as `8e8bc67`.
+- Preserved the simple UI and separate, copyable result text box; retained aman's
+  reusable components and fixed their lint failures. Removed unused generator and
+  animation dependencies.
+- Added persisted repair-step outcomes, action history in reports and subsequent
+  analysis, and live AI comparison of INITIAL/FINAL photos with saved explanations.
+  New evidence, analysis or action feedback invalidates an earlier verification.
+- A live test exposed schema echoes in model responses. Parsing now accepts exactly
+  one schema-valid fenced result and rejects ambiguous answers; verification uses
+  a clearer prompt. Regression coverage includes both cases.
+- **32 backend tests passed; 8 frontend tests passed; lint and production build
+  passed.** Real Chrome workflow passed with live image analysis and photo
+  verification. A separate mobile browser check passed for action feedback,
+  refresh persistence, report history and note-only verification.
+- Tested production frontend: **http://localhost:3001**; backend:
+  **http://127.0.0.1:8010**. Production dependency audit: **0 vulnerabilities**.
+  Full audit reports five high-severity development-tool findings stemming from
+  `braces` through Next's ESLint dependencies; the registry has no patched braces
+  release. Do not force a major Next/ESLint downgrade to suppress this report.
+
+The earlier investigation details below describe the original repair; the latest
+validation and feature status above take precedence.
+
 Verified on 4 October 2026 with the problem: **“My bicycle chain keeps falling when I change gears.”**
 The complete browser path now works with real image bytes and a live Gemma response.
 
@@ -87,8 +112,8 @@ The complete browser path now works with real image bytes and a live Gemma respo
    backend's provider failures were independently tested with SDK mocks.
 
 10. **Remaining limitations.** Persistence is local SQLite, not the configured
-    PostgreSQL/cloud services. Final verification records real final evidence and
-    the user's reported outcome, but does not yet perform AI before/after comparison.
+    PostgreSQL/cloud services. Final verification now performs AI before/after
+    comparison when both photo stages exist; otherwise it labels the note-only result.
     Safety rules are conservative text rules supplementing the model, not a complete
     hazard detector. Concurrent editing of the same session, retention limits, and
     multi-user deployment are not implemented. The successful initial photo reveals
@@ -105,7 +130,7 @@ The complete browser path now works with real image bytes and a live Gemma respo
     the local database is not encrypted; the application remains bound to localhost.
 
 12. **Recommended next step.** Try the workflow with a close-up of the user's actual
-    geared-bicycle drivetrain, then add evidence-based before/after verification.
+    geared-bicycle drivetrain, including separate before and after photos.
     Do not treat this software test as proof that a physical repair is safe or complete.
 
 | Required status | Result |

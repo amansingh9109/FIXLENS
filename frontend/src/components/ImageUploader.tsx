@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
+import Image from "next/image";
 import { UploadCloud, X, Aperture } from "lucide-react";
 
 interface ImageUploaderProps {
@@ -110,7 +111,7 @@ export function ImageUploader({ onImageSelected }: ImageUploaderProps) {
             borderColor: "var(--border-color)"
           }}
         >
-          <img src={preview} alt="Evidence preview" className="w-full h-auto max-h-[400px] object-contain" />
+          <Image unoptimized width={800} height={600} src={preview} alt="Evidence preview" className="w-full h-auto max-h-[400px] object-contain" />
           
           <div 
             className="absolute bottom-3 left-3 flex items-center gap-2 px-3 py-1 rounded-lg text-xs font-mono backdrop-blur-md border"

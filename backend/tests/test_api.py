@@ -258,3 +258,79 @@ def test_image_text_without_real_evidence_is_rejected(monkeypatch, gemini_calls)
     session_id = client.post("/api/v1/sessions", json={"description": "Please read the code in this screenshot."}).json()["session_id"]
     assert client.post(f"/api/v1/sessions/{session_id}/analyze").status_code == 502
     assert "analysis" not in storage.load_session(session_id)
+
+
+def test_verification_compares_actual_before_and_after(monkeypatch, gemini_calls):
+    def compare(**kwargs):
+        gemini_calls.append(kwargs)
+        return SimpleNamespace(text=json.dumps({"verification_result": "UNCERTAIN", "explanation": "The fault is not visible in these views."}))
+    monkeypatch.setattr(ai_service.genai.Client.models, "generate_content", compare)
+    session_id = client.post("/api/v1/sessions", json={"description": "My bicycle chain keeps falling."}).json()["session_id"]
+    images = []
+    for stage, color in [("INITIAL", "red"), ("FINAL", "blue")]:
+        image = BytesIO()
+        Image.new("RGB", (16, 16), color).save(image, format="PNG")
+        images.append(image.getvalue())
+        assert client.post(f"/api/v1/sessions/{session_id}/evidence", files={"file": ("chain.png", images[-1], "image/png")}, data={"stage": stage}).status_code == 200
+    response = client.post(f"/api/v1/sessions/{session_id}/verify", json={"final_note": "It is resolved."})
+    assert response.status_code == 200, response.text
+    assert response.json()["verification_result"] == "UNCERTAIN"
+    parts = gemini_calls[0]["contents"]
+    assert [part.inline_data.data for part in parts if not isinstance(part, str)] == images
+    report = client.get(f"/api/v1/sessions/{session_id}/report").json()
+    assert report["verification_explanation"] == response.json()["explanation"]
+
+
+@pytest.mark.parametrize("outcome,status", [("IMPROVED", "COMPLETED"), ("CANNOT_PERFORM", "BLOCKED")])
+def test_action_feedback_persists_and_informs_next_analysis(outcome, status, gemini_calls):
+    session_id = client.post("/api/v1/sessions", json={"description": "My bicycle chain keeps falling."}).json()["session_id"]
+    client.post(f"/api/v1/sessions/{session_id}/analyze")
+    session = storage.load_session(session_id)
+    session["risk_level"] = "LOW"
+    session["repair_steps"] = [{"step_number": 1, "title": "Check the chain", "status": "PENDING"}]
+    session["verification_result"] = "LIKELY_RESOLVED"
+    storage.save_session(session)
+    response = client.post(f"/api/v1/sessions/{session_id}/actions/1/complete", json={"outcome": outcome})
+    assert response.status_code == 200
+    assert response.json()["status"] == status
+    assert storage.load_session(session_id)["verification_result"] is None
+    assert client.get(f"/api/v1/sessions/{session_id}/report").json()["actions_performed"][0]["outcome"] == outcome
+    client.post(f"/api/v1/sessions/{session_id}/analyze")
+    assert outcome in gemini_calls[-1]["contents"][1]
+
+
+def test_unsafe_and_missing_actions_are_rejected():
+    session_id = client.post("/api/v1/sessions", json={"description": "There are exposed mains wires."}).json()["session_id"]
+    assert client.post(f"/api/v1/sessions/{session_id}/actions/1/complete", json={"outcome": "COMPLETED"}).status_code == 409
+    assert client.post("/api/v1/sessions/missing/actions/1/complete", json={"outcome": "COMPLETED"}).status_code == 404
+
+
+def test_failed_photo_verification_does_not_store_success(monkeypatch):
+    session_id = client.post("/api/v1/sessions", json={"description": "My bicycle chain keeps falling."}).json()["session_id"]
+    image = BytesIO()
+    Image.new("RGB", (16, 16)).save(image, format="PNG")
+    for stage in ["INITIAL", "FINAL"]:
+        client.post(f"/api/v1/sessions/{session_id}/evidence", files={"file": ("chain.png", image.getvalue(), "image/png")}, data={"stage": stage})
+    monkeypatch.delenv("GEMINI_API_KEY")
+    assert client.post(f"/api/v1/sessions/{session_id}/verify", json={"final_note": "Resolved"}).status_code == 503
+    assert storage.load_session(session_id)["verification_result"] is None
+
+
+def test_verification_schema_echo_is_ignored_but_conflicting_results_rejected():
+    from app.schemas import VerificationResult
+    result = json.dumps({"verification_result": "UNCERTAIN", "explanation": "Insufficient visible evidence."})
+    echoed = "```json\n" + json.dumps(VerificationResult.model_json_schema()) + "\n```\nSome commentary\n```json\n" + result + "\n```"
+    assert ai_service.parse_result(echoed, VerificationResult).verification_result == "UNCERTAIN"
+    with pytest.raises(ValueError):
+        ai_service.parse_result("```json\n" + result + "\n```\n```json\n" + result + "\n```", VerificationResult)
+
+
+def test_new_evidence_invalidates_previous_verification():
+    session_id = client.post("/api/v1/sessions", json={"description": "My bicycle chain keeps falling."}).json()["session_id"]
+    client.post(f"/api/v1/sessions/{session_id}/verify", json={"final_note": "Resolved"})
+    image = BytesIO()
+    Image.new("RGB", (16, 16)).save(image, format="PNG")
+    client.post(f"/api/v1/sessions/{session_id}/evidence", files={"file": ("chain.png", image.getvalue(), "image/png")}, data={"stage": "ADDITIONAL"})
+    session = client.get(f"/api/v1/sessions/{session_id}").json()
+    assert session["verification_result"] is None
+    assert session["status"] == "evidence_added"

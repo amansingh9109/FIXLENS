@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import EvidencePicker from "@/components/evidence-picker";
 import ResultText from "@/components/result-text";
-import { API_URL, analyzeSession, getSession, uploadEvidence, type Session } from "@/lib/api";
+import { API_URL, analyzeSession, completeAction, getSession, uploadEvidence, type Session } from "@/lib/api";
 
 export default function SessionPage() {
   const params = useParams<{ id: string }>();
@@ -51,6 +51,14 @@ export default function SessionPage() {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Analysis couldn't be completed. Please retry.");
     } finally { busy.current = false; setProgress(""); }
+  }
+
+  async function recordAction(step: number, outcome: string) {
+    if (busy.current) return;
+    busy.current = true; setError(""); setProgress("Saving your repair notes...");
+    try { await completeAction(params.id, step, outcome); await loadSession(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not save this step."); }
+    finally { busy.current = false; setProgress(""); }
   }
 
   if (loading) {
@@ -137,6 +145,17 @@ export default function SessionPage() {
                 <p className="mt-2 text-stone-600">{step.instruction}</p>
                 <p className="mt-2 text-sm text-amber-900">{step.safety_warning}</p>
                 <p className="muted mt-2">Expected result: {step.expected_result}</p>
+                <p className="muted mt-2">Status: {step.status.toLowerCase().replaceAll("_", " ")}</p>
+                <label className="mt-3 block text-sm">Record the outcome of step {step.step_number}
+                  <select className="field mt-2" value="" disabled={!!progress || !["LOW", "MEDIUM"].includes(session.risk_level)} onChange={event => { if (event.target.value) void recordAction(step.step_number, event.target.value); }}>
+                    <option value="">Choose what happened</option>
+                    <option value="COMPLETED">Completed</option>
+                    <option value="IMPROVED">The problem improved</option>
+                    <option value="UNCHANGED">It did not help</option>
+                    <option value="WORSE">The problem got worse</option>
+                    <option value="CANNOT_PERFORM">I cannot do this step</option>
+                  </select>
+                </label>
               </li>)}
             </ol>
           </section>}

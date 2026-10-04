@@ -60,6 +60,9 @@ export const createSession = (description: string) => request<{ session_id: stri
 }, "Unable to create investigation.");
 export const getSession = (id: string) => request<Session>(`/api/v1/sessions/${encodeURIComponent(id)}`);
 export const analyzeSession = (id: string) => request<Analysis>(`/api/v1/sessions/${encodeURIComponent(id)}/analyze`, { method: "POST" }, "We couldn't analyze your evidence right now. Please retry.");
+export const completeAction = (id: string, step: number, outcome: string) => request(`/api/v1/sessions/${encodeURIComponent(id)}/actions/${step}/complete`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ outcome }),
+}, "Could not save this step. Please retry.");
 export function uploadEvidence(id: string, file: File, description: string, stage = "INITIAL") {
   const data = new FormData();
   data.append("file", file); data.append("description", description); data.append("evidence_type", "image"); data.append("stage", stage);

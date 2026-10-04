@@ -16,11 +16,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem("fixlens-theme") as Theme | null;
-    if (saved && ["neon", "emerald", "blue", "light"].includes(saved)) {
-      setTheme(saved);
-    }
-    setMounted(true);
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      const saved = localStorage.getItem("fixlens-theme") as Theme | null;
+      if (saved && ["neon", "emerald", "blue", "light"].includes(saved)) setTheme(saved);
+      setMounted(true);
+    });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
