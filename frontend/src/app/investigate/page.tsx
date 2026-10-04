@@ -2,18 +2,25 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
+import EvidencePicker from "@/components/evidence-picker";
+import { analyzeSession, createSession, uploadEvidence } from "@/lib/api";
 
 export default function InvestigatePage() {
   const router = useRouter();
   const [description, setDescription] = useState(
-    "My bicycle chain keeps falling when I change gears.",
+    "",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState("");
+  const pending = useRef({ sessionId: "", uploaded: false });
+  const busy = useRef(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (busy.current) return;
     setError("");
 
     if (!description.trim() || description.trim().length < 10) {
@@ -21,23 +28,25 @@ export default function InvestigatePage() {
       return;
     }
 
+    if (!file) { setError("Please select an evidence image."); return; }
+    busy.current = true;
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/v1/sessions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ description: description.trim() }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Unable to create a repair session.");
+      if (!pending.current.sessionId) {
+        setProgress("Starting your repair notes...");
+        const data = await createSession(description.trim());
+        pending.current.sessionId = data.session_id;
       }
-
-      const data = await response.json();
-      router.push(`/session/${data.session_id}`);
+      if (!pending.current.uploaded) {
+        setProgress("Uploading your photo...");
+        await uploadEvidence(pending.current.sessionId, file, description.trim());
+        pending.current.uploaded = true;
+      }
+      setProgress("Looking at your photo and checking safety...");
+      await analyzeSession(pending.current.sessionId);
+      setProgress("Getting your notes ready...");
+      router.push(`/session/${encodeURIComponent(pending.current.sessionId)}`);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -46,81 +55,36 @@ export default function InvestigatePage() {
       );
     } finally {
       setIsSubmitting(false);
+      busy.current = false;
+      setProgress("");
     }
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-12 text-slate-100">
-      <div className="mx-auto max-w-4xl rounded-3xl border border-slate-800 bg-slate-900/70 p-7 shadow-2xl shadow-slate-950/50 backdrop-blur-sm">
-        <div className="mb-8 flex items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-400">
-              FixLens
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold text-white">
-              Start a new investigation
-            </h1>
+    <main className="page-shell max-w-3xl">
+      <Link href="/" className="muted hover:text-stone-800">Back home</Link>
+      <h1 className="page-title mt-5">What needs fixing?</h1>
+      <p className="mt-3 text-stone-600">Tell us a little about the problem and add a clear photo.</p>
+      <form onSubmit={handleSubmit} className="surface mt-8 space-y-7">
+        <div>
+          <label htmlFor="problem" className="mb-2 block font-medium">What are you trying to fix?</label>
+          <textarea id="problem" value={description} disabled={isSubmitting} rows={5} maxLength={2000}
+            onChange={event => { setDescription(event.target.value); pending.current = { sessionId: "", uploaded: false }; }}
+            className="field" placeholder="For example: My bike chain falls off when I change gears." />
+          <div className="mt-2 flex justify-between gap-4 text-xs text-stone-500">
+            <span>What happens? When did it start?</span><span>{description.length}/2000</span>
           </div>
-          <Link
-            href="/"
-            className="rounded-full border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-400 hover:text-cyan-300"
-          >
-            Back home
-          </Link>
         </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-            <label
-              htmlFor="problem"
-              className="mb-3 block text-base font-medium text-slate-200"
-            >
-              What are you trying to fix?
-            </label>
-            <textarea
-              id="problem"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              rows={6}
-              maxLength={2000}
-              className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-base text-white outline-none transition focus:border-cyan-400"
-              placeholder="Example: My bicycle chain keeps falling when I change gears."
-            />
-            <div className="mt-3 flex items-center justify-between text-sm text-slate-400">
-              <span>Clear, natural language is encouraged.</span>
-              <span>{description.length}/2000</span>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/40 p-5">
-            <label className="mb-3 block text-base font-medium text-slate-200">
-              Add evidence image
-            </label>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="block w-full text-sm text-slate-300 file:mr-4 file:rounded-full file:border-0 file:bg-cyan-500 file:px-4 file:py-2 file:text-sm file:font-medium file:text-slate-950 hover:file:bg-cyan-400"
-            />
-            <p className="mt-2 text-sm text-slate-400">
-              Supported: JPG, JPEG, PNG, WebP. Max size: 10 MB.
-            </p>
-          </div>
-
-          {error ? (
-            <div className="rounded-2xl border border-rose-700 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-              {error}
-            </div>
-          ) : null}
-
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="inline-flex items-center justify-center rounded-full bg-cyan-400 px-6 py-3 text-base font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSubmitting ? "Starting investigation..." : "Start Investigation"}
+        <EvidencePicker file={file} disabled={isSubmitting} onChange={selected => { setFile(selected); pending.current = { sessionId: "", uploaded: false }; }} label="Add a photo" />
+        {progress && <p role="status" aria-live="polite" className="text-sm text-[#465c3e]">{progress}</p>}
+        {error && <div role="alert" className="notice-error">{error}</div>}
+        <div className="flex flex-wrap items-center gap-4 border-t border-stone-200 pt-6">
+          <button type="submit" disabled={isSubmitting} className="button-primary">
+            {isSubmitting ? "Working on it..." : error ? "Try again" : "Check this problem"}
           </button>
-        </form>
-      </div>
+          <span className="muted">You can add more photos later.</span>
+        </div>
+      </form>
     </main>
   );
 }

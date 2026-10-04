@@ -1,99 +1,37 @@
 from __future__ import annotations
 
-import json
+import logging
 import os
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import Response
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-load_dotenv(Path(__file__).resolve().parents[2] / ".env.example")
+from .config import MAX_IMAGE_BYTES
+from .schemas import CreateSessionRequest, EvidenceUploadResponse, VerificationInput
+from .ai_service import analyze as call_gemini_analysis
+from .evidence import validate_image
+from .safety import apply_safety
+from . import storage
 
-try:
-    from google import genai
-except Exception:  # pragma: no cover - optional dependency fallback
-    genai = None
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
 app = FastAPI(title="FixLens API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"],
+    allow_origins=list(dict.fromkeys([
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:3001", "http://127.0.0.1:3001",
+        os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/"),
+    ])),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-SESSIONS: dict[str, dict[str, Any]] = {}
-
-
-class CreateSessionRequest(BaseModel):
-    description: str = Field(..., min_length=10, max_length=2000)
-
-
-class Observation(BaseModel):
-    description: str
-    confidence: float
-    evidence_reference: str = "initial_evidence"
-
-
-class Hypothesis(BaseModel):
-    cause: str
-    confidence: float
-    status: Literal["POSSIBLE", "SUPPORTED", "WEAKENED", "REJECTED"] = "POSSIBLE"
-
-
-class SafetyAssessment(BaseModel):
-    level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"]
-    reason: str
-    warning: str | None = None
-
-
-class EvidenceRequest(BaseModel):
-    type: str
-    instruction: str
-    reason: str
-    recommended_angle: str | None = None
-    required_components: list[str]
-    priority: Literal["low", "medium", "high"] = "medium"
-
-
-class RepairStep(BaseModel):
-    step_number: int
-    title: str
-    instruction: str
-    reason: str
-    safety_warning: str
-    expected_result: str
-    status: Literal["PENDING", "IN_PROGRESS", "COMPLETED", "SKIPPED", "BLOCKED"] = "PENDING"
-
-
-class InvestigationResponse(BaseModel):
-    object_name: str
-    component: str
-    confidence: float
-    observations: list[Observation]
-    hypotheses: list[Hypothesis]
-    safety: SafetyAssessment
-    evidence_required: list[EvidenceRequest]
-    next_action: str
-    risk_level: Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"]
-    repair_steps: list[RepairStep] = []
-
-
-class VerificationInput(BaseModel):
-    final_note: str | None = None
-
-
-class EvidenceUploadResponse(BaseModel):
-    status: str
-    evidence_id: str
-
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -109,7 +47,7 @@ def create_event(event_type: str, description: str) -> dict[str, str]:
 
 
 def generate_session_id() -> str:
-    return f"FL-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
+    return f"FL-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex.upper()}"
 
 
 def normalise_object(description: str) -> str:
@@ -125,143 +63,6 @@ def normalise_object(description: str) -> str:
     return "Object"
 
 
-def build_analysis(description: str) -> InvestigationResponse:
-    lowered = description.lower()
-    object_name = normalise_object(description)
-    if object_name == "Bicycle":
-        component = "Rear drivetrain"
-        confidence = 0.94
-        observations = [
-            Observation(
-                description="Chain appears loose or misaligned in the provided image.",
-                confidence=0.82,
-                evidence_reference="initial_evidence",
-            ),
-            Observation(
-                description="The drivetrain area shows signs of chain tension or alignment issues.",
-                confidence=0.75,
-                evidence_reference="initial_evidence",
-            ),
-        ]
-        hypotheses = [
-            Hypothesis(cause="Derailleur adjustment issue", confidence=0.72),
-            Hypothesis(cause="Chain wear or stretched chain", confidence=0.58),
-        ]
-        evidence_required = [
-            EvidenceRequest(
-                type="image",
-                instruction="Upload a close-up photo of the rear derailleur and chain.",
-                reason="Current evidence does not clearly show derailleur alignment.",
-                recommended_angle="side",
-                required_components=["chain", "derailleur", "cassette"],
-                priority="high",
-            )
-        ]
-        repair_steps = [
-            RepairStep(
-                step_number=1,
-                title="Inspect Chain Position",
-                instruction="Check whether the chain sits correctly on the cassette and chainrings before changing anything.",
-                reason="This identifies whether the issue is caused by misalignment or tension.",
-                safety_warning="Do not force the chain while the drivetrain is under load.",
-                expected_result="The chain sits evenly without obvious slack or misalignment.",
-                status="PENDING",
-            ),
-            RepairStep(
-                step_number=2,
-                title="Check Rear Derailleur Alignment",
-                instruction="Look for derailleur hanger alignment and confirm the chain is not rubbing or sitting outside the sprockets.",
-                reason="A misaligned derailleur often causes chain drop under load.",
-                safety_warning="Wear gloves if the bike is in a work stand and avoid touching moving teeth.",
-                expected_result="The derailleur appears aligned and the chain tracks cleanly.",
-                status="PENDING",
-            ),
-        ]
-        risk_level = "LOW"
-        safety = SafetyAssessment(
-            level="LOW",
-            reason="This is a standard mechanical bicycle inspection with no obvious high-risk conditions.",
-            warning="Use caution around drivetrain components and avoid working near moving parts.",
-        )
-    else:
-        component = "Visible component"
-        confidence = 0.62
-        observations = [
-            Observation(
-                description="The object appears to have a visible defect or mismatch in the supplied photo.",
-                confidence=0.66,
-                evidence_reference="initial_evidence",
-            )
-        ]
-        hypotheses = [
-            Hypothesis(cause="Visible misalignment or loose assembly", confidence=0.56),
-            Hypothesis(cause="Missing or degraded fastening component", confidence=0.48),
-        ]
-        evidence_required = [
-            EvidenceRequest(
-                type="image",
-                instruction="Take a clearer photo of the affected area in direct light.",
-                reason="The current image is not detailed enough to identify the exact cause reliably.",
-                recommended_angle="straight_on",
-                required_components=["affected area", "fastener", "surrounding structure"],
-                priority="medium",
-            )
-        ]
-        repair_steps = []
-        risk_level = "UNKNOWN"
-        safety = SafetyAssessment(
-            level="UNKNOWN",
-            reason="The available evidence is not sufficient to judge whether the item is safe to repair without more context.",
-            warning="More images are required before troubleshooting can continue safely.",
-        )
-
-    return InvestigationResponse(
-        object_name=object_name,
-        component=component,
-        confidence=confidence,
-        observations=observations,
-        hypotheses=hypotheses,
-        safety=safety,
-        evidence_required=evidence_required,
-        next_action="collect_evidence",
-        risk_level=risk_level,
-        repair_steps=repair_steps,
-    )
-
-
-def call_gemini_analysis(description: str) -> InvestigationResponse | None:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key or genai is None:
-        return None
-
-    try:
-        client = genai.Client(api_key=api_key)
-        prompt = """
-        You are FixLens, a visual troubleshooting investigator for physical objects.
-        Return a valid JSON object with this exact structure:
-        {
-          "object_name": "string",
-          "component": "string",
-          "confidence": 0.0,
-          "observations": [{"description": "string", "confidence": 0.0, "evidence_reference": "string"}],
-          "hypotheses": [{"cause": "string", "confidence": 0.0, "status": "POSSIBLE"}],
-          "safety": {"level": "LOW", "reason": "string", "warning": "string"},
-          "evidence_required": [{"type": "image", "instruction": "string", "reason": "string", "recommended_angle": "string", "required_components": ["string"], "priority": "high"}],
-          "next_action": "collect_evidence",
-          "risk_level": "LOW",
-          "repair_steps": [{"step_number": 1, "title": "string", "instruction": "string", "reason": "string", "safety_warning": "string", "expected_result": "string", "status": "PENDING"}]
-        }
-        User description: """ + description + """
-        Keep the output valid JSON only. Do not use markdown fences.
-        """
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        raw_text = getattr(response, "text", None) or str(response)
-        payload = json.loads(raw_text)
-        return InvestigationResponse.model_validate(payload)
-    except Exception:
-        return None
-
-
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -270,7 +71,7 @@ def health_check() -> dict[str, str]:
 @app.post("/api/v1/sessions")
 def create_session(payload: CreateSessionRequest) -> dict[str, str]:
     session_id = generate_session_id()
-    SESSIONS[session_id] = {
+    session = {
         "session_id": session_id,
         "description": payload.description,
         "user_description": payload.description,
@@ -286,12 +87,14 @@ def create_session(payload: CreateSessionRequest) -> dict[str, str]:
         "created_at": utc_now(),
         "updated_at": utc_now(),
     }
+    storage.save_session(session)
+    logger.info("session created id=%s", session_id)
     return {"session_id": session_id, "status": "created"}
 
 
 @app.get("/api/v1/sessions/{session_id}")
 def get_session(session_id: str) -> dict[str, Any]:
-    session = SESSIONS.get(session_id)
+    session = storage.load_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -303,54 +106,90 @@ async def upload_evidence(
     file: UploadFile | None = File(default=None),
     description: str = Form(default=""),
     evidence_type: str = Form(default="image"),
+    stage: str = Form(default="INITIAL"),
 ) -> EvidenceUploadResponse:
-    session = SESSIONS.get(session_id)
+    session = storage.load_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if evidence_type != "image":
+        raise HTTPException(status_code=422, detail="Only image evidence is supported.")
+    if file is None:
+        raise HTTPException(status_code=422, detail="An evidence image is required.")
+    if stage not in {"INITIAL", "ADDITIONAL", "FINAL"}:
+        raise HTTPException(422, "Invalid evidence stage.")
+    logger.info("evidence upload started session=%s", session_id)
+    try:
+        data = await file.read(MAX_IMAGE_BYTES + 1)
+        validate_image(data, file.content_type, file.filename or "")
+    finally:
+        await file.close()
+
     evidence_id = str(uuid4())
+    storage.save_evidence(evidence_id, session_id, data, file.content_type)
     item = {
         "id": evidence_id,
         "session_id": session_id,
         "type": evidence_type,
         "file_name": file.filename if file else "n/a",
         "description": description or "Uploaded evidence",
-        "stage": "INITIAL",
+        "stage": stage,
+        "url": f"/api/v1/sessions/{session_id}/evidence/{evidence_id}",
         "created_at": utc_now(),
     }
     session["evidence"].append(item)
     session["timeline"].append(create_event("evidence_uploaded", f"Evidence uploaded: {item['type']}"))
     session["updated_at"] = utc_now()
+    storage.save_session(session)
+    logger.info("evidence stored session=%s evidence=%s", session_id, evidence_id)
     return EvidenceUploadResponse(status="uploaded", evidence_id=evidence_id)
 
 
 @app.post("/api/v1/sessions/{session_id}/analyze")
 def analyze_session(session_id: str) -> dict[str, Any]:
-    session = SESSIONS.get(session_id)
+    session = storage.load_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    result = call_gemini_analysis(session["description"]) or build_analysis(session["description"])
+    logger.info("analysis started session=%s", session_id)
+    files = {item["id"]: storage.load_evidence(item["id"], session_id) for item in session["evidence"]}
+    if any(value is None for value in files.values()):
+        raise HTTPException(409, "Evidence is missing. Please upload it again.")
+    try:
+        result = call_gemini_analysis(session["description"], session["evidence"], files, session.get("analysis"))
+        result = apply_safety(result, session["description"], session["evidence"])
+    except HTTPException as exc:
+        session["analysis_error"] = exc.detail
+        storage.save_session(session)
+        logger.warning("analysis failed session=%s status=%s", session_id, exc.status_code)
+        raise
+    session["analysis_error"] = None
     session["status"] = "analyzed"
     session["risk_level"] = result.risk_level
     session["object_category"] = result.object_name
     session["observations"] = [obs.model_dump() for obs in result.observations]
+    if "initial_observations" not in session:
+        session["initial_observations"] = session["observations"]
     session["hypotheses"] = [hyp.model_dump() for hyp in result.hypotheses]
     session["repair_steps"] = [step.model_dump() for step in result.repair_steps]
     session["analysis"] = result.model_dump()
     session["timeline"].append(create_event("analysis_complete", "Initial multimodal investigation completed"))
     session["updated_at"] = utc_now()
+    storage.save_session(session)
+    logger.info("analysis stored session=%s", session_id)
     return result.model_dump()
 
 
 @app.post("/api/v1/sessions/{session_id}/verify")
 def verify_session(session_id: str, payload: VerificationInput) -> dict[str, str]:
-    session = SESSIONS.get(session_id)
+    session = storage.load_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
     note = (payload.final_note or "").lower()
-    if "better" in note or "improved" in note or "resolved" in note:
+    if "not resolved" in note or "not better" in note or "not improved" in note:
+        verification_result = "UNCHANGED"
+    elif "better" in note or "improved" in note or "resolved" in note:
         verification_result = "LIKELY_RESOLVED"
     elif "worse" in note or "worsened" in note:
         verification_result = "WORSE"
@@ -363,12 +202,15 @@ def verify_session(session_id: str, payload: VerificationInput) -> dict[str, str
     session["verification_result"] = verification_result
     session["timeline"].append(create_event("verification_complete", "Final verification completed"))
     session["updated_at"] = utc_now()
+    session["final_note"] = payload.final_note
+    session["verification_evidence_ids"] = [item["id"] for item in session["evidence"] if item["stage"] == "FINAL"]
+    storage.save_session(session)
     return {"verification_result": verification_result, "status": "verified"}
 
 
 @app.get("/api/v1/sessions/{session_id}/report")
 def get_report(session_id: str) -> dict[str, Any]:
-    session = SESSIONS.get(session_id)
+    session = storage.load_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -377,13 +219,24 @@ def get_report(session_id: str) -> dict[str, Any]:
         "session_id": session_id,
         "object": session.get("object_category", "Object"),
         "original_problem": original_problem,
-        "initial_observations": session.get("observations", []),
+        "initial_observations": session.get("initial_observations", session.get("observations", [])),
         "possible_causes": session.get("hypotheses", []),
         "evidence_collected": session.get("evidence", []),
         "actions_performed": session.get("repair_steps", []),
-        "verification_result": session.get("verification_result", "UNCERTAIN"),
-        "remaining_concerns": "Continue monitoring for recurring symptoms and re-check alignment if the issue reappears.",
-        "safety_notes": "Follow the recommended safety guidance during troubleshooting and stop if conditions become unsafe.",
+        "verification_result": session.get("verification_result") or "UNCERTAIN",
+        "remaining_concerns": "Verification is based on your report, not a guarantee of repair or safety.",
+        "safety_notes": session.get("analysis", {}).get("safety", {}).get("warning") or "Safety has not been established.",
         "date": session.get("created_at", utc_now()),
     }
     return report
+
+
+@app.get("/api/v1/sessions/{session_id}/evidence/{evidence_id}")
+def get_evidence(session_id: str, evidence_id: str):
+    session = storage.load_session(session_id)
+    if not session or not any(item["id"] == evidence_id for item in session["evidence"]):
+        raise HTTPException(404, "Evidence not found")
+    stored = storage.load_evidence(evidence_id, session_id)
+    if not stored:
+        raise HTTPException(404, "Evidence not found")
+    return Response(stored[0], media_type=stored[1], headers={"X-Content-Type-Options": "nosniff"})

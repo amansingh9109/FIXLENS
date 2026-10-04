@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { getReport } from "@/lib/api";
 
 type ReportData = {
   session_id?: string;
@@ -20,24 +21,24 @@ export default function ReportPage() {
   const params = useParams<{ id: string }>();
   const [report, setReport] = useState<ReportData | null>(null);
 
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     async function loadReport() {
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/v1/sessions/${params.id}/report`,
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setReport(data);
-      }
+      try { setError(""); setReport(await getReport<ReportData>(params.id)); }
+      catch (failure) { setError(failure instanceof Error ? failure.message : "Could not load the report."); }
     }
 
     loadReport();
-  }, [params.id]);
+  }, [params.id, retry]);
 
+  if (error) return <main className="page-shell">
+    <p role="alert">{error}</p><button className="button-primary mt-4" onClick={() => setRetry(value => value + 1)}>Retry report</button>
+  </main>;
   if (!report) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-slate-200">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-4">
+      <main className="page-shell">
+        <div className="muted">
           Preparing repair report...
         </div>
       </main>
@@ -45,78 +46,28 @@ export default function ReportPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-10 text-slate-100">
-      <div className="mx-auto max-w-4xl rounded-3xl border border-slate-800 bg-slate-900 p-7">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm uppercase tracking-[0.18em] text-cyan-400">
-              Final repair report
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold text-white">
-              Session {report.session_id}
-            </h1>
-          </div>
-          <Link
-            href={`/session/${params.id}`}
-            className="rounded-full border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-300"
-          >
-            Back to session
-          </Link>
-        </div>
-
-        <div className="mt-8 grid gap-6 md:grid-cols-2">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
-            <h2 className="text-lg font-semibold text-white">
-              Problem summary
-            </h2>
-            <p className="mt-3 text-slate-300">
-              Object: {report.object || "Unknown"}
-            </p>
-            <p className="mt-2 text-slate-300">
-              Original problem: {report.original_problem}
-            </p>
-            <p className="mt-3 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-              Verification: {report.verification_result || "UNCERTAIN"}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
-            <h2 className="text-lg font-semibold text-white">Safety notes</h2>
-            <p className="mt-3 text-slate-300">{report.safety_notes}</p>
-          </div>
-        </div>
-
-        <div className="mt-8 grid gap-6 md:grid-cols-2">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
-            <h2 className="text-lg font-semibold text-white">
-              Initial observations
-            </h2>
-            <ul className="mt-3 space-y-2 text-slate-300">
-              {(report.initial_observations || []).map((item, index) => (
-                <li key={`${item.description}-${index}`}>{item.description}</li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
-            <h2 className="text-lg font-semibold text-white">
-              Possible causes
-            </h2>
-            <ul className="mt-3 space-y-2 text-slate-300">
-              {(report.possible_causes || []).map((item, index) => (
-                <li key={`${item.cause}-${index}`}>{item.cause}</li>
-              ))}
-            </ul>
-          </div>
-        </div>
-
-        <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
-          <h2 className="text-lg font-semibold text-white">
-            Remaining concerns
-          </h2>
-          <p className="mt-3 text-slate-300">{report.remaining_concerns}</p>
-        </div>
-      </div>
+    <main className="page-shell max-w-3xl">
+      <Link href={`/session/${params.id}`} className="muted hover:text-stone-800">Back to repair notes</Link>
+      <h1 className="page-title mt-5">Repair summary</h1>
+      <p className="muted mt-2">{report.date ? new Date(report.date).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : ""}</p>
+      <article className="surface mt-8 space-y-7">
+        <section>
+          <h2 className="section-title">{report.object || "Your repair"}</h2>
+          <p className="mt-3 text-stone-600">{report.original_problem}</p>
+          <p className="mt-4 text-sm font-medium">Verification: {report.verification_result || "UNCERTAIN"}</p>
+        </section>
+        <section className="section-divider">
+          <h2 className="section-title">What we observed</h2>
+          <ul className="mt-3 space-y-3 text-stone-600">{report.initial_observations?.map((item, index) => <li key={index}>{item.description}</li>)}</ul>
+        </section>
+        <section className="section-divider">
+          <h2 className="section-title">Possible causes</h2>
+          <ul className="mt-3 space-y-3 text-stone-600">{report.possible_causes?.map((item, index) => <li key={index}>{item.cause}</li>)}</ul>
+        </section>
+        <section className="section-divider"><h2 className="section-title">Safety notes</h2><p className="mt-3 text-stone-600">{report.safety_notes}</p></section>
+        <section className="section-divider"><h2 className="section-title">Keep in mind</h2><p className="mt-3 text-stone-600">{report.remaining_concerns}</p></section>
+        <details className="section-divider text-xs text-stone-500"><summary>Repair reference</summary><p className="mt-3 break-all">{report.session_id}</p></details>
+      </article>
     </main>
   );
 }

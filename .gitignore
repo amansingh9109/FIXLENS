@@ -8,6 +8,9 @@ frontend/.env.local
 .venv/
 __pycache__/
 *.pyc
+backend/data/
+test-results/
+.pytest_cache/
 
 node_modules/
 .next/

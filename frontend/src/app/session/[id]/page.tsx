@@ -1,110 +1,62 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-
-type SessionData = {
-  session_id?: string;
-  description?: string;
-  status?: string;
-  object_category?: string;
-  risk_level?: string;
-  observations?: Array<{
-    description: string;
-    confidence: number;
-    evidence_reference?: string;
-  }>;
-  hypotheses?: Array<{ cause: string; confidence: number; status?: string }>;
-  repair_steps?: Array<{
-    step_number: number;
-    title: string;
-    instruction: string;
-    expected_result: string;
-    safety_warning: string;
-  }>;
-  timeline?: Array<{ type: string; description: string; timestamp: string }>;
-  evidence?: Array<{ type: string; description: string; file_name?: string }>;
-  analysis?: { safety?: { level: string; reason: string; warning?: string } };
-};
+import { useCallback, useEffect, useRef, useState } from "react";
+import EvidencePicker from "@/components/evidence-picker";
+import ResultText from "@/components/result-text";
+import { API_URL, analyzeSession, getSession, uploadEvidence, type Session } from "@/lib/api";
 
 export default function SessionPage() {
   const params = useParams<{ id: string }>();
-  const [session, setSession] = useState<SessionData | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function loadSession() {
-      try {
-        const response = await fetch(
-          `http://127.0.0.1:8000/api/v1/sessions/${params.id}`,
-        );
-        if (!response.ok) {
-          throw new Error("Session not found");
-        }
-        const data = await response.json();
-        setSession(data);
-      } catch {
-        setSession({
-          session_id: params.id,
-          description: "My bicycle chain keeps falling when I change gears.",
-          status: "offline-mode",
-          object_category: "Bicycle",
-          risk_level: "LOW",
-          observations: [
-            {
-              description: "Chain appears loose or misaligned in the image.",
-              confidence: 0.82,
-            },
-          ],
-          hypotheses: [
-            {
-              cause: "Derailleur adjustment issue",
-              confidence: 0.72,
-              status: "POSSIBLE",
-            },
-          ],
-          repair_steps: [
-            {
-              step_number: 1,
-              title: "Inspect chain position",
-              instruction:
-                "Check whether the chain sits correctly on the cassette.",
-              expected_result:
-                "Chain appears aligned and no obvious slack is visible.",
-              safety_warning:
-                "Do not work near moving parts while the bike is in gear.",
-            },
-          ],
-          timeline: [
-            {
-              type: "session_created",
-              description: "Repair session started",
-              timestamp: new Date().toISOString(),
-            },
-          ],
-          evidence: [
-            { type: "image", description: "Initial evidence uploaded" },
-          ],
-          analysis: {
-            safety: {
-              level: "LOW",
-              reason: "No obvious high-risk condition is visible.",
-            },
-          },
-        });
-      } finally {
-        setLoading(false);
+  const [error, setError] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState("");
+  const busy = useRef(false);
+  const uploaded = useRef(false);
+  const loadSession = useCallback(async () => {
+    try {
+      const data = await getSession(params.id);
+      setSession(data);
+      if (data.analysis_error) {
+        setError(typeof data.analysis_error === "string" ? data.analysis_error : data.analysis_error.message || "Analysis couldn't be completed.");
       }
-    }
-
-    loadSession();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not load this investigation.");
+    } finally { setLoading(false); }
   }, [params.id]);
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => { if (active) void loadSession(); });
+    return () => { active = false; };
+  }, [loadSession]);
+
+  async function investigate() {
+    if (busy.current) return;
+    busy.current = true; setError("");
+    try {
+      if (file && !uploaded.current) {
+        setProgress("Uploading evidence...");
+        await uploadEvidence(params.id, file, "Additional troubleshooting evidence", "ADDITIONAL");
+        uploaded.current = true;
+      }
+      setProgress("Analyzing evidence and checking safety...");
+      await analyzeSession(params.id);
+      await loadSession();
+      setFile(null); uploaded.current = false;
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Analysis couldn't be completed. Please retry.");
+    } finally { busy.current = false; setProgress(""); }
+  }
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-slate-200">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-4 text-lg">
+      <main className="page-shell">
+        <div className="muted">
           Loading investigation...
         </div>
       </main>
@@ -112,194 +64,104 @@ export default function SessionPage() {
   }
 
   if (!session) {
-    return null;
+    return <main className="page-shell">
+      <p role="alert">{error || "This investigation could not be loaded."}</p>
+      <button className="button-primary mt-4" onClick={() => { setError(""); void loadSession(); }}>Retry loading</button>
+      <Link className="ml-4" href="/investigate">New investigation</Link>
+    </main>;
   }
 
-  const riskTone =
-    session.risk_level === "HIGH"
-      ? "border-rose-500 bg-rose-500/10 text-rose-200"
-      : session.risk_level === "MEDIUM"
-        ? "border-amber-500 bg-amber-500/10 text-amber-200"
-        : "border-emerald-500 bg-emerald-500/10 text-emerald-200";
-
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900 p-6 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-cyan-400">
-              Investigation workspace
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold text-white">
-              Session {session.session_id}
-            </h1>
-          </div>
-          <div className="flex gap-3">
-            <Link
-              href="/investigate"
-              className="rounded-full border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-cyan-400"
-            >
-              New session
-            </Link>
-            <Link
-              href={`/session/${session.session_id}/verify`}
-              className="rounded-full bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-300"
-            >
-              Verify repair
-            </Link>
-          </div>
-        </header>
-
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <section className="space-y-6">
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-              <p className="text-sm uppercase tracking-[0.18em] text-slate-400">
-                Problem description
-              </p>
-              <p className="mt-3 text-lg text-slate-100">
-                {session.description}
-              </p>
-            </div>
-
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-white">
-                  Observed findings
-                </h2>
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs font-semibold ${riskTone}`}
-                >
-                  {session.risk_level || "UNKNOWN"} Risk
-                </span>
-              </div>
-              <div className="space-y-4">
-                {(session.observations || []).map((observation, index) => (
-                  <div
-                    key={`${observation.description}-${index}`}
-                    className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4"
-                  >
-                    <p className="text-slate-100">{observation.description}</p>
-                    <div className="mt-2 flex items-center justify-between text-sm text-slate-400">
-                      <span>Confidence</span>
-                      <span>
-                        {Math.round((observation.confidence || 0) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-              <h2 className="mb-4 text-xl font-semibold text-white">
-                Possible causes
-              </h2>
-              <div className="space-y-4">
-                {(session.hypotheses || []).map((hypothesis, index) => (
-                  <div
-                    key={`${hypothesis.cause}-${index}`}
-                    className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4"
-                  >
-                    <p className="text-slate-100">{hypothesis.cause}</p>
-                    <div className="mt-2 flex items-center justify-between text-sm text-slate-400">
-                      <span>{hypothesis.status || "POSSIBLE"}</span>
-                      <span>
-                        {Math.round((hypothesis.confidence || 0) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+    <main className="page-shell">
+      <div className="flex flex-wrap items-start justify-between gap-5 border-b border-stone-200 pb-7">
+        <div>
+          <p className="muted">Your repair notes</p>
+          <h1 className="page-title mt-2">{session.analysis?.object_name || "Your repair"}</h1>
+          <p className="mt-3 max-w-2xl text-stone-600">{session.description}</p>
+        </div>
+        <Link href={`/session/${session.session_id}/verify`} className="button-secondary">Verify repair</Link>
+      </div>
+      {error && <div role="alert" className="notice-error mt-6">{error}</div>}
+      {progress && <p role="status" aria-live="polite" className="mt-6 text-sm text-[#465c3e]">{progress}</p>}
+      <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-14">
+        <div className="space-y-8">
+          {session.analysis && <ResultText key={JSON.stringify(session.analysis)} analysis={session.analysis} />}
+          <section>
+            <h2 className="section-title">What we can see</h2>
+            <p className="muted mt-1">What can be seen in your photos.</p>
+            {session.observations.length === 0 && <p className="mt-4 text-stone-500">No observations yet. Run a check to get started.</p>}
+            <ul className="mt-4 divide-y divide-stone-200">
+              {session.observations.map((item, index) => <li key={index} className="py-4 first:pt-0">
+                <p>{item.description}</p><p className="muted mt-2">{Math.round(item.confidence * 100)}% confidence</p>
+              </li>)}
+            </ul>
+          </section>
+          <section className="section-divider">
+            <h2 className="section-title">Possible causes</h2>
+            <p className="muted mt-1">Things to investigate, rather than confirmed faults.</p>
+            <ul className="mt-4 divide-y divide-stone-200">
+              {session.hypotheses.map((item, index) => <li key={index} className="py-4 first:pt-0">
+                <p>{item.cause}</p><p className="muted mt-2">{item.status.toLowerCase()} · {Math.round(item.confidence * 100)}% confidence</p>
+              </li>)}
+            </ul>
+          </section>
+          <section className="section-divider">
+            <h2 className="section-title">Safety assessment</h2>
+            <p className="mt-3 text-sm font-medium">{session.risk_level === "HIGH" ? "Stop and get professional help" : session.risk_level === "MEDIUM" ? "Proceed with caution" : session.risk_level === "LOW" ? "Lower risk — still take care" : "Safety is not yet established"}</p>
+            <p className="mt-2 text-stone-600">{session.analysis?.safety.reason || "There isn’t enough information to assess safety."}</p>
+            {session.analysis?.safety.warning && <p className={session.risk_level === "HIGH" ? "notice-error mt-4" : "notice-warning mt-4"}>{session.analysis.safety.warning}</p>}
+          </section>
+          <section className="section-divider">
+            <h2 className="section-title">What to do next</h2>
+            <p className="mt-3 text-stone-600">{session.analysis?.next_action.replaceAll("_", " ") || "Add a photo and check the problem."}</p>
+            {(session.analysis?.evidence_required.length ?? 0) > 0 && <>
+              <h3 className="mt-6 font-medium">A few more photos would help</h3>
+              <ul className="mt-3 space-y-4">
+                {session.analysis?.evidence_required.map((item, index) => <li key={index} className="border-l-2 border-stone-200 pl-4">
+                  <p>{item.instruction}</p><p className="muted mt-1">{item.reason}</p>
+                </li>)}
+              </ul>
+            </>}
+            <div className="mt-6">
+              <EvidencePicker file={file} disabled={!!progress} onChange={selected => { setFile(selected); uploaded.current = false; }} label="Add another photo" />
+              <button disabled={!!progress} onClick={investigate} className="button-primary mt-4">
+                {progress ? "Working on it..." : file ? "Upload and check again" : "Check again"}
+              </button>
             </div>
           </section>
-
-          <aside className="space-y-6">
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-              <h2 className="text-xl font-semibold text-white">
-                Investigation status
-              </h2>
-              <ul className="mt-4 space-y-3 text-sm text-slate-300">
-                <li>
-                  Object:{" "}
-                  <span className="font-medium text-white">
-                    {session.object_category || "Unknown"}
-                  </span>
-                </li>
-                <li>
-                  Status:{" "}
-                  <span className="font-medium text-white">
-                    {session.status}
-                  </span>
-                </li>
-                <li>
-                  Safety:{" "}
-                  <span className="font-medium text-white">
-                    {session.analysis?.safety?.level ||
-                      session.risk_level ||
-                      "UNKNOWN"}
-                  </span>
-                </li>
-              </ul>
-            </div>
-
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-              <h2 className="text-xl font-semibold text-white">
-                Suggested next step
-              </h2>
-              <p className="mt-3 text-sm text-slate-300">
-                {session.analysis?.safety?.reason ||
-                  "More evidence is required before continuing."}
-              </p>
-            </div>
-
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-              <h2 className="text-xl font-semibold text-white">
-                Evidence timeline
-              </h2>
-              <ul className="mt-4 space-y-3 border-l border-slate-700 pl-4 text-sm text-slate-300">
-                {(session.timeline || []).map((event) => (
-                  <li
-                    key={event.timestamp}
-                    className="relative before:absolute before:left-[-1.3rem] before:top-1 before:h-2 before:w-2 before:rounded-full before:bg-cyan-400"
-                  >
-                    <div className="font-medium text-white">{event.type}</div>
-                    <div>{event.description}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </aside>
+          {session.repair_steps.length > 0 && <section className="section-divider">
+            <h2 className="section-title">Things to check</h2>
+            <ol className="mt-4 space-y-6">
+              {session.repair_steps.map(step => <li key={step.step_number}>
+                <h3 className="font-medium">{step.step_number}. {step.title}</h3>
+                <p className="mt-2 text-stone-600">{step.instruction}</p>
+                <p className="mt-2 text-sm text-amber-900">{step.safety_warning}</p>
+                <p className="muted mt-2">Expected result: {step.expected_result}</p>
+              </li>)}
+            </ol>
+          </section>}
         </div>
-
-        <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="text-xl font-semibold text-white">
-            Troubleshooting steps
-          </h2>
-          <div className="mt-4 space-y-4">
-            {(session.repair_steps || []).map((step) => (
-              <div
-                key={step.step_number}
-                className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm uppercase tracking-[0.14em] text-cyan-400">
-                    Step {step.step_number}
-                  </p>
-                  <span className="rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-300">
-                    PENDING
-                  </span>
-                </div>
-                <h3 className="mt-3 text-lg font-semibold text-white">
-                  {step.title}
-                </h3>
-                <p className="mt-2 text-slate-200">{step.instruction}</p>
-                <p className="mt-2 text-sm text-slate-400">
-                  Expected result: {step.expected_result}
-                </p>
-              </div>
-            ))}
+        <aside className="space-y-7 lg:border-l lg:border-stone-200 lg:pl-7">
+          <section>
+            <h2 className="section-title">Your photos</h2>
+            <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-1">
+              {session.evidence.map(item => <figure key={item.id}>
+                <Image unoptimized width={800} height={600} src={`${API_URL}${item.url}`} alt={`Uploaded evidence: ${item.file_name}`} className="h-auto max-h-64 w-full rounded-md object-contain" />
+                <figcaption className="muted mt-2 break-all">{item.stage === "FINAL" ? "After" : item.stage === "ADDITIONAL" ? "Additional photo" : "Before"} · {item.file_name}</figcaption>
+              </figure>)}
+            </div>
+          </section>
+          <div className="section-divider text-sm">
+            <p className="muted">Part being checked</p>
+            <p className="mt-1">{session.analysis?.component || "Not yet identified"}</p>
+            <p className="muted mt-4">Status</p><p className="mt-1 capitalize">{session.status.replaceAll("_", " ")}</p>
           </div>
-        </section>
+          <details className="section-divider text-sm">
+            <summary className="font-medium">Repair history</summary>
+            <ul className="mt-4 space-y-3 text-stone-600">{session.timeline.map(event => <li key={event.id}>{event.description}</li>)}</ul>
+            <p className="mt-5 break-all text-xs text-stone-400">Reference: {session.session_id}</p>
+          </details>
+        </aside>
       </div>
     </main>
   );
